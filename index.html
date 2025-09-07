@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Expense Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h2>💰 Multi-User Expense Tracker</h2>
+
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+      <label>Select User: </label>
+      <select id="userSelect"></select>
+      <button onclick="addUser()">+ Add User</button>
+    </div>
+
+    <div class="summary-cards">
+      <div class="summary-card">
+        <h4>Current Balance</h4>
+        <div class="amount">₹<span id="balance">0</span></div>
+      </div>
+      <div class="summary-card">
+        <h4>This Month Expenses</h4>
+        <div class="amount">₹<span id="monthlyExpense">0</span></div>
+      </div>
+      <div class="summary-card">
+        <h4>Total Expenses</h4>
+        <div class="amount">₹<span id="totalExpense">0</span></div>
+      </div>
+    </div>
+
+    <div class="expense-form">
+      <h3>💳 Add Balance</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Amount</label>
+          <input id="income" type="number" placeholder="Add Balance" style="width: 150px;">
+        </div>
+        <button onclick="addBalance()">Add Balance</button>
+      </div>
+    </div>
+
+    <div class="expense-form">
+      <h3>📝 Add Expense</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Item Name</label>
+          <input id="item" type="text" placeholder="Item Name" style="width: 150px;">
+        </div>
+        <div class="form-group">
+          <label>Amount</label>
+          <input id="amount" type="number" placeholder="Amount" style="width: 120px;">
+        </div>
+        <div class="form-group">
+          <label>Category</label>
+          <select id="category" style="width: 120px;">
+            <option value="Food">🍽️ Food</option>
+            <option value="Travel">✈️ Travel</option>
+            <option value="Shopping">🛒 Shopping</option>
+            <option value="Bills">💡 Bills</option>
+            <option value="Entertainment">🎬 Entertainment</option>
+            <option value="Healthcare">🏥 Healthcare</option>
+            <option value="Other">📦 Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Date</label>
+          <input id="expenseDate" type="date" style="width: 140px;">
+        </div>
+        <button onclick="addExpense()">Add Expense</button>
+      </div>
+    </div>
+
+    <div id="successMessage" class="success-message" style="display: none;"></div>
+
+    <div class="filter-section">
+      <h3>🔍 Filter Expenses</h3>
+      <div class="month-filter">
+        <label>View Month:</label>
+        <select id="monthFilter">
+          <option value="">All Months</option>
+        </select>
+        <label>Year:</label>
+        <select id="yearFilter">
+          <option value="">All Years</option>
+        </select>
+        <button onclick="applyFilters()">Apply Filter</button>
+        <button onclick="clearFilters()" class="clear-filters">Clear Filters</button>
+      </div>
+    </div>
+
+    <h3>📋 Expenses <span id="filterInfo"></span></h3>
+    <div id="expenseTableContainer">
+      <table>
+        <thead>
+          <tr><th>Item</th><th>Category</th><th>Amount</th><th>Date</th><th>Action</th></tr>
+        </thead>
+        <tbody id="expenseTable"></tbody>
+      </table>
+    </div>
+
+    <div class="chart-container">
+      <div class="chart-wrapper">
+        <h3>📊 Monthly Comparison</h3>
+        <canvas id="expenseChart"></canvas>
+      </div>
+      <div class="chart-wrapper">
+        <h3>🥧 Category Breakdown</h3>
+        <canvas id="categoryChart"></canvas>
+      </div>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
