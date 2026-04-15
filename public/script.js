@@ -1,75 +1,100 @@
-// script.js — talks to the Node.js + MySQL backend
+// script.js — with JWT Authentication
 const API = "http://localhost:3000/api";
 
-let users = [];          // array of user objects from DB
-let currentUser = null;  // { id, name, balance }
+let currentUser = null;
 let barChart, pieChart;
 let currentFilter = { month: "", year: "" };
+let allExpenses = [];
+let filteredExpenses = [];
+
+// ─────────────────────────────────────────
+//  AUTH HELPERS
+// ─────────────────────────────────────────
+function getToken() {
+  return localStorage.getItem("token");
+}
+
+function authHeaders() {
+  return {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${getToken()}`
+  };
+}
+
+function logout() {
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+  window.location.href = "login.html";
+}
 
 // ─────────────────────────────────────────
 //  INIT
 // ─────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", async () => {
-  document.getElementById("expenseDate").value = new Date().toISOString().split("T")[0];
-  await loadUsers();
-});
-
-// ─────────────────────────────────────────
-//  USERS
-// ─────────────────────────────────────────
-async function loadUsers() {
-  try {
-    const res = await fetch(`${API}/users`);
-    users = await res.json();
-    updateUserDropdown();
-    if (users.length > 0) {
-      currentUser = users[0];
-      await loadExpensesAndRender();
-    }
-  } catch (err) {
-    showError("Cannot connect to server. Is the backend running?");
+  // Check if logged in
+  const token = getToken();
+  if (!token) {
+    window.location.href = "login.html";
+    return;
   }
-}
 
-function updateUserDropdown() {
-  const userSelect = document.getElementById("userSelect");
-  userSelect.innerHTML = "";
-  users.forEach((u) => {
-    const option = document.createElement("option");
-    option.value = u.id;
-    option.text = u.name;
-    if (currentUser && u.id === currentUser.id) option.selected = true;
-    userSelect.add(option);
-  });
-  userSelect.onchange = async () => {
-    currentUser = users.find((u) => u.id == userSelect.value);
-    currentFilter = { month: "", year: "" };
-    await loadExpensesAndRender();
-  };
-}
-
-async function addUser() {
-  const name = prompt("Enter User Name:");
-  if (!name || !name.trim()) return;
-
+  // Verify token is valid
   try {
-    const res = await fetch(`${API}/users`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim() }),
+    const res = await fetch(`${API}/auth/verify`, {
+      headers: { "Authorization": `Bearer ${token}` }
     });
-    const data = await res.json();
     if (!res.ok) {
-      alert(data.error || "Failed to add user");
+      logout();
       return;
     }
-    users.push(data);
-    currentUser = data;
-    updateUserDropdown();
-    await loadExpensesAndRender();
-    showSuccessMessage(`User "${data.name}" added successfully!`);
+    const data = await res.json();
+    currentUser = data.user;
   } catch (err) {
-    showError("Server error: " + err.message);
+    showError("Cannot connect to server.");
+    return;
+  }
+
+  // Set today's date
+  document.getElementById("expenseDate").value = new Date().toISOString().split("T")[0];
+
+  // Show user info in header
+  updateUserHeader();
+
+  // Load data
+  await loadExpensesAndRender();
+});
+
+function updateUserHeader() {
+  const nameEl = document.getElementById("userName");
+  const avatarEl = document.getElementById("userAvatar");
+  if (nameEl) nameEl.textContent = currentUser.name || currentUser.username;
+  if (avatarEl) avatarEl.textContent = (currentUser.name || currentUser.username || "U")[0].toUpperCase();
+}
+
+// ─────────────────────────────────────────
+//  LOAD DATA
+// ─────────────────────────────────────────
+async function loadExpensesAndRender() {
+  if (!currentUser) return;
+  try {
+    const [expRes, profRes] = await Promise.all([
+      fetch(`${API}/expenses`, { headers: authHeaders() }),
+      fetch(`${API}/profile`,  { headers: authHeaders() })
+    ]);
+
+    if (expRes.status === 401 || expRes.status === 403) { logout(); return; }
+
+    allExpenses = await expRes.json();
+    const profile = await profRes.json();
+    currentUser = { ...currentUser, ...profile };
+
+    updateFilterDropdowns();
+    applyClientFilter();
+    renderSummary();
+    renderTable();
+    renderCharts();
+  } catch (err) {
+    showError("Failed to load data: " + err.message);
   }
 }
 
@@ -77,21 +102,20 @@ async function addUser() {
 //  BALANCE
 // ─────────────────────────────────────────
 async function addBalance() {
-  if (!currentUser) { alert("Please select or add a user first!"); return; }
   const val = +document.getElementById("income").value;
   if (val <= 0) { alert("Please enter a valid amount!"); return; }
 
   try {
-    const res = await fetch(`${API}/users/${currentUser.id}/balance`, {
+    const res = await fetch(`${API}/balance`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount: val }),
+      headers: authHeaders(),
+      body: JSON.stringify({ amount: val })
     });
+    if (res.status === 401) { logout(); return; }
     const data = await res.json();
     if (!res.ok) { alert(data.error); return; }
 
     currentUser.balance = data.balance;
-    updateUserInList(data);
     document.getElementById("income").value = "";
     await loadExpensesAndRender();
     showSuccessMessage(`₹${val} added to balance!`);
@@ -103,58 +127,31 @@ async function addBalance() {
 // ─────────────────────────────────────────
 //  EXPENSES
 // ─────────────────────────────────────────
-let allExpenses = [];   // full expense list for current user
-let filteredExpenses = []; // after applying month/year filter
-
-async function loadExpensesAndRender() {
-  if (!currentUser) return;
-  try {
-    // Load ALL expenses for filter dropdowns and chart
-    const res = await fetch(`${API}/users/${currentUser.id}/expenses`);
-    allExpenses = await res.json();
-
-    // Load summary (balance, monthly, total)
-    const summaryRes = await fetch(`${API}/users/${currentUser.id}/summary`);
-    const summary = await summaryRes.json();
-    currentUser.balance = summary.balance;
-
-    updateFilterDropdowns();
-    applyClientFilter();
-    renderSummary(summary);
-    renderTable();
-    renderCharts();
-  } catch (err) {
-    showError("Failed to load expenses: " + err.message);
-  }
-}
-
 async function addExpense() {
   const item = document.getElementById("item").value.trim();
   const amount = +document.getElementById("amount").value;
   const category = document.getElementById("category").value;
   const date = document.getElementById("expenseDate").value;
 
-  if (!currentUser) { alert("Please select or add a user first!"); return; }
   if (!item || amount <= 0 || !date) { alert("Please fill all fields with valid data!"); return; }
 
   try {
-    const res = await fetch(`${API}/users/${currentUser.id}/expenses`, {
+    const res = await fetch(`${API}/expenses`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item, amount, category, date }),
+      headers: authHeaders(),
+      body: JSON.stringify({ item, amount, category, date })
     });
+    if (res.status === 401) { logout(); return; }
     const data = await res.json();
     if (!res.ok) { alert(data.error); return; }
 
-    currentUser.balance = data.user.balance;
-    updateUserInList(data.user);
-
+    currentUser.balance = data.balance;
     document.getElementById("item").value = "";
     document.getElementById("amount").value = "";
     document.getElementById("expenseDate").value = new Date().toISOString().split("T")[0];
 
     await loadExpensesAndRender();
-    showSuccessMessage(`Expense "${item}" (₹${amount}) added successfully!`);
+    showSuccessMessage(`Expense "${item}" (₹${amount}) added!`);
   } catch (err) {
     showError("Server error: " + err.message);
   }
@@ -164,14 +161,15 @@ async function deleteExpense(expenseId, amount) {
   if (!confirm("Are you sure you want to delete this expense?")) return;
 
   try {
-    const res = await fetch(`${API}/users/${currentUser.id}/expenses/${expenseId}`, {
+    const res = await fetch(`${API}/expenses/${expenseId}`, {
       method: "DELETE",
+      headers: authHeaders()
     });
+    if (res.status === 401) { logout(); return; }
     const data = await res.json();
     if (!res.ok) { alert(data.error); return; }
 
-    currentUser.balance = data.user.balance;
-    updateUserInList(data.user);
+    currentUser.balance = data.balance;
     await loadExpensesAndRender();
     showSuccessMessage(`Expense deleted and ₹${amount} refunded!`);
   } catch (err) {
@@ -180,15 +178,15 @@ async function deleteExpense(expenseId, amount) {
 }
 
 // ─────────────────────────────────────────
-//  FILTERS (client-side on already-loaded data)
+//  FILTERS
 // ─────────────────────────────────────────
 function updateFilterDropdowns() {
   const months = new Set();
   const years = new Set();
 
-  allExpenses.forEach((e) => {
+  allExpenses.forEach(e => {
     const d = new Date(e.date);
-    months.add(d.getMonth());   // 0-11
+    months.add(d.getMonth());
     years.add(d.getFullYear());
   });
 
@@ -197,7 +195,7 @@ function updateFilterDropdowns() {
 
   const monthFilter = document.getElementById("monthFilter");
   monthFilter.innerHTML = '<option value="">All Months</option>';
-  Array.from(months).sort((a,b)=>a-b).forEach((m) => {
+  Array.from(months).sort((a,b)=>a-b).forEach(m => {
     const o = document.createElement("option");
     o.value = m; o.text = monthNames[m];
     if (currentFilter.month !== "" && Number(currentFilter.month) === m) o.selected = true;
@@ -206,7 +204,7 @@ function updateFilterDropdowns() {
 
   const yearFilter = document.getElementById("yearFilter");
   yearFilter.innerHTML = '<option value="">All Years</option>';
-  Array.from(years).sort().forEach((y) => {
+  Array.from(years).sort().forEach(y => {
     const o = document.createElement("option");
     o.value = y; o.text = y;
     if (currentFilter.year !== "" && Number(currentFilter.year) === y) o.selected = true;
@@ -234,7 +232,7 @@ function clearFilters() {
 }
 
 function applyClientFilter() {
-  filteredExpenses = allExpenses.filter((e) => {
+  filteredExpenses = allExpenses.filter(e => {
     const d = new Date(e.date);
     const mOk = currentFilter.month === "" || d.getMonth() == currentFilter.month;
     const yOk = currentFilter.year === "" || d.getFullYear() == currentFilter.year;
@@ -245,10 +243,10 @@ function applyClientFilter() {
 // ─────────────────────────────────────────
 //  RENDER
 // ─────────────────────────────────────────
-function renderSummary(summary) {
-  document.getElementById("balance").innerText = Number(summary.balance).toFixed(2);
-  document.getElementById("monthlyExpense").innerText = Number(summary.thisMonthExpenses).toFixed(2);
-  document.getElementById("totalExpense").innerText = Number(summary.totalExpenses).toFixed(2);
+function renderSummary() {
+  document.getElementById("balance").innerText = Number(currentUser.balance || 0).toFixed(2);
+  document.getElementById("monthlyExpense").innerText = Number(currentUser.thisMonthExpenses || 0).toFixed(2);
+  document.getElementById("totalExpense").innerText = Number(currentUser.totalExpenses || 0).toFixed(2);
 }
 
 function renderTable() {
@@ -257,12 +255,12 @@ function renderTable() {
 
   if (filteredExpenses.length === 0) {
     table.innerHTML = '<tr><td colspan="5" class="no-data">No expenses found</td></tr>';
-    return;
+    updateFilterInfo(); return;
   }
 
   [...filteredExpenses]
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
-    .forEach((e) => {
+    .sort((a,b) => new Date(b.date) - new Date(a.date))
+    .forEach(e => {
       table.innerHTML += `<tr>
         <td>${e.item}</td>
         <td>${e.category}</td>
@@ -271,7 +269,6 @@ function renderTable() {
         <td><button onclick="deleteExpense(${e.id}, ${e.amount})" style="background:#dc3545;padding:4px 8px;font-size:0.8em;">Delete</button></td>
       </tr>`;
     });
-
   updateFilterInfo();
 }
 
@@ -289,12 +286,10 @@ function updateFilterInfo() {
 
 function renderCharts() {
   const source = (currentFilter.month !== "" || currentFilter.year !== "")
-    ? filteredExpenses
-    : allExpenses;
+    ? filteredExpenses : allExpenses;
 
-  // Monthly bar chart
   const monthly = {};
-  source.forEach((e) => {
+  source.forEach(e => {
     const month = e.date.toString().slice(0, 7);
     monthly[month] = (monthly[month] || 0) + Number(e.amount);
   });
@@ -309,19 +304,18 @@ function renderCharts() {
         data: Object.values(monthly),
         backgroundColor: "rgba(102, 126, 234, 0.6)",
         borderColor: "rgba(102, 126, 234, 1)",
-        borderWidth: 1,
-      }],
+        borderWidth: 1
+      }]
     },
     options: {
       responsive: true,
       plugins: { legend: { display: true } },
-      scales: { y: { beginAtZero: true } },
-    },
+      scales: { y: { beginAtZero: true } }
+    }
   });
 
-  // Category doughnut chart
   const categories = {};
-  source.forEach((e) => {
+  source.forEach(e => {
     categories[e.category] = (categories[e.category] || 0) + Number(e.amount);
   });
 
@@ -332,27 +326,25 @@ function renderCharts() {
       labels: Object.keys(categories),
       datasets: [{
         data: Object.values(categories),
-        backgroundColor: ["#FF6384","#36A2EB","#FFCE56","#4CAF50","#9966FF","#FF9F40","#FF6B6B"],
-      }],
+        backgroundColor: ["#FF6384","#36A2EB","#FFCE56","#4CAF50","#9966FF","#FF9F40","#FF6B6B"]
+      }]
     },
     options: {
       responsive: true,
-      plugins: { legend: { position: "bottom" } },
-    },
+      plugins: { legend: { position: "bottom" } }
+    }
   });
 }
 
 // ─────────────────────────────────────────
 //  HELPERS
 // ─────────────────────────────────────────
-function updateUserInList(updatedUser) {
-  const idx = users.findIndex((u) => u.id === updatedUser.id);
-  if (idx !== -1) users[idx] = updatedUser;
-}
-
 function showSuccessMessage(message) {
   const msgDiv = document.getElementById("successMessage");
   msgDiv.textContent = message;
+  msgDiv.style.background = "#d4edda";
+  msgDiv.style.color = "#155724";
+  msgDiv.style.borderColor = "#c3e6cb";
   msgDiv.style.display = "block";
   setTimeout(() => { msgDiv.style.display = "none"; }, 3000);
 }
